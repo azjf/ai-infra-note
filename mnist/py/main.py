@@ -93,8 +93,12 @@ def main():
     parser.add_argument('--save-model', action='store_true', 
                         help='For Saving the current Model')
     args = parser.parse_args()
+    args.batch_size = 256
+    args.epochs = 1
+    args.save_model = True
 
-    use_accel = not args.no_accel and torch.accelerator.is_available()
+    # use_accel = not args.no_accel and torch.accelerator.is_available()
+    use_accel = False
 
     torch.manual_seed(args.seed)
 

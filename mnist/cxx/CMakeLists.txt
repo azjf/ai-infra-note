@@ -1,10 +1,12 @@
 cmake_minimum_required(VERSION 3.5)
 project(mnist)
 set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+set(CMAKE_BUILD_TYPE Debug)
 
 find_package(Torch REQUIRED)
 
-option(DOWNLOAD_MNIST "Download the MNIST dataset from the internet" ON)
+option(DOWNLOAD_MNIST "Download the MNIST dataset from the internet" OFF)
 if (DOWNLOAD_MNIST)
   message(STATUS "Downloading MNIST dataset")
   execute_process(
