@@ -1,0 +1,131 @@
+:PROPERTIES:
+:CREATED: 2025-06-29T13:08:57+0800
+:ID: CC2C6F76-6AB0-414E-843E-59B9EE83EEB6
+:END:
+
+
+* PyTorch
+PyTorch的主要功能为使用各种硬件来加速神经网络训练，而神经网络训练本质上是进行​*多维矩阵/向量计算*​。
+PyTorch和Numpy等矩阵计算库的区别在于，PyTorch可以使用GPU等硬件来加速计算，且可以自动计算自定义网络（由已知微分计算方法的基础算子构成）中误差关于权重参数的微分。
+
+** 基础用法
+神经网络一般以MNIST作为hello world, pytorch也不例外：
+1. MNIST示例代码
+   1) Python前端: https://github.com/pytorch/examples/tree/main/mnist
+   2) C++前端: https://github.com/pytorch/examples/tree/main/cpp/mnist
+2. 训练超参数
+   1) batch size: 一个batch仅反向传播误差一次（使用多个样本的平均输入和误差来更新权重），当batch size为1时则退化为在线学习
+   2) optimizer: 功能为自适应调节误差反向传播时的学习率
+
+** 基础原理与实现
+*** Tensor
+1. PyTorch最基础的功能为多维矩阵计算，因此最基础的问题为如何高效表达多维矩阵，而这正是Tensor数据结构要解决的问题。
+2. Tensor核心属性包括: size, strides, dtype, device, layout
+   1) size: 数学多维矩阵的维度
+   2) dtype: 数对应硬件表达的精度是有限的，dtype被用于表达内存中数的精度
+   3) device: PyTorch需要支持多种物理设备，device被用于表达tensor所在的设备
+   4) strides
+      - 一种普通而高效多维矩阵存储方式/layout为strided, 其使用一维连续内存来存储多维数组。
+      - strides是一个维度同于size的一维数组，使用可以高效地计算多维矩阵中任意元素一维内存中的偏移。
+        例如，A_{M \times N} 矩阵的strides为[N, 1], 而第(i, j)个元素对应的内存偏移为i * strides[0] + j * strides[1] = i * N + j.
+      - stride还可以高效地表达​*矩阵切片slice*​。
+        例如，A[:, 0]生成的一维数组的对应的stride为[N], 其第i个元素的内存偏移为offset + i * N.
+   5) layout: 除了strided存储方式外，PyTorch还支持sparse/mkldnn等其它layout.
+3. Tensor的相关定义位于：
+   1) Tensor (aten/src/ATen/templates/TensorBody.h), 内含TensorImpl指针。
+   2) TensorImpl (c10/core/TensorImpl.h), 内含storage指针和metadata (如sizes/strides).
+
+*** 算子
+1. 算子指的是Tensor上的add/mm等神经网络依赖的矩阵数学操作，比如torch.mm(x, y).
+   1) 为了支持多种device/layout/dtype, PyTorch需要为每一个(device, layout, dtype)组合都提供相应的算子实现。
+   2) 运行时，一个顶层算子调用在真正调用到底层算子实现之前，需要进行​*两次dispatch*​, 第一次针对后端和PyTorch功能，具体可参考我的博客文章[[https://azjf.github.io/pytorch_dispatcher.html][浅析PyTorch Dispatcher源码]], 第二次为针对dtype switch语句。
+   3) Python前端算子调用语句 (如torch.add(a, b))到C++后端算子实现之间的连接是基于pybind实现，而相关胶水代码则是根据torch/share/ATen/Declarations.yaml中的算子元数据自动生成的。
+2. 算子实现位于aten/src/ATen/native, 该目录顶层文件为CPU算子实现，而cuda|cudnn|mkl|mps等子目录中的文件则为对应的后端算子实现。
+   PyTorch有两三千个算子，2.7.1源码中aten/src/ATen/native的代码约450 kLoC. 虽然这看起来很很多，但个人理解​*这些代码的业务逻辑本质是同质的*​，看懂一个算子后基本上就能理解其它算子的实现和执行逻辑。
+
+*** 自动微分autograd
+1. 自动微分指的是可以自动计算自定义网络中误差关于权重参数的微分，而其实现前提为已知作为其基础构件的算子的微分计算方法。
+   本质上，若y = f(g(x)), 且抑制f()和g()的微分，那么可以根据链式法则计算出高阶函数f(g())的微分。
+2. Python前端loss.backward()到C++后端算子的微分实现之间的连接也是基于pybind实现的，而相关胶水代码则是根据tools/autograd/derivatives.yaml的元数据自动生成的。
+
+*** 参考文档
+1. https://blog.ezyang.com/2019/05/pytorch-internals/
+2. https://blog.ezyang.com/2020/09/lets-talk-about-the-pytorch-dispatcher/
+3. [[https://zhuanlan.zhihu.com/p/598044604][PyTorch源码分析（1）- 整体预览]]
+4. [[https://zhuanlan.zhihu.com/p/598291307][PyTorch源码分析（2）——动态图原理]]
+5. https://github.com/pytorch/pytorch/blob/main/CONTRIBUTING.md
+
+
+** 自定义算子
+PyTorch支持自定义算子，具体实现方法可以参考[[https://docs.pytorch.org/tutorials/advanced/cpp_custom_ops.html][官方文档]]，基本上跟着流程走一下就可以了。
+
+*** 参考文档
+1. https://docs.pytorch.org/tutorials/advanced/cpp_custom_ops.html
+2. https://github.com/pytorch/extension-cpp
+3. [[https://zhouyifan.net/2022/03/18/20220315-custom-op/][PyTorch Custom OP （自定义算子） 教程]]
+
+
+** TODO 添加新设备
+1. 添加新设备可能需要in-tree的修改PyTorch源码。
+2. 个人认为，可以采用类似于cudnn/mkl的方式来实现新设备算子，也就是将具体算子具体实现在PyTorch库外维护。
+3. 可能的关键改动点：
+   1) PrivateUse backend
+   2) 新Tensor storage实现
+
+*** PyTorch源码编译
+PyTorch 2.7.1源码编译步骤如下：
+#+begin_src bash
+  # ccache
+  ccache -M 0 && ccache -F 0
+  export CMAKE_C_COMPILER_LAUNCHER=ccache && export CMAKE_CXX_COMPILER_LAUNCHER=ccache && export CMAKE_CUDA_COMPILER_LAUNCHER=ccache
+
+  # gcc会报错error: "control reaches end of non-void function"
+  CC=clang CXX=clang++ DEBUG=1 CMAKE_LINKER_TYPE=MOLD TORCH_SHOW_CPP_STACKTRACES=1 USE_DISTRIBUTED=0 USE_MKLDNN=0 USE_CUDA=0 BUILD_TEST=0 USE_FBGEMM=0 USE_NNPACK=0 USE_QNNPACK=0 USE_XNNPACK=0 python setup.py develop|install
+
+  # libstdc++.so.6: version `GLIBCXX_3.4.30' not found
+  ln -sf /usr/lib/x86_64-linux-gnu/libstdc++.so.6 conda/envs/pytorch/lib/
+#+end_src
+注意事项如下：
+1. 使用ccache节省编译时间。
+2. 关掉MKLDNN/NNPACK等不需要的扩展以减轻编译工作量。
+
+*** 参考文档
+1. https://github.com/pytorch/pytorch/blob/main/CONTRIBUTING.md
+2. https://docs.pytorch.org/tutorials/advanced/extend_dispatcher.html
+3. https://docs.pytorch.org/tutorials/advanced/privateuseone.html
+4. https://github.com/pytorch/pytorch/blob/7fd3b6988681557a4dfc35dc99807cdd78e805c9/test/cpp_extensions/open_registration_extension.cpp
+5. https://dev-discuss.pytorch.org/t/any-simple-example-about-the-new-way-to-register-custom-device-through-privateuse1/1561
+
+* CUDA
+** 个人理解
+1. 硬件: cuda core -> warp -> Streaming Multiprocessor (SM)
+   1) 一个warp由32个CUDA线程构成，而这些线程只能执行相同的指令（Single-Instruction Multiple-Thread, SIMT）。
+      个人认为SIMT应该类似于SIMD (Intel AVX), 如此做的好处是复用相同硬件部分而节省门电路/晶体管。
+   2) 一张显卡具有多个SM, 个人猜测其本质上应该类似于多核CPU, 原因也应该是为了单核性能上限有限的问题。
+2. 软件: thread -> block -> grid, kernel_function<<<numBlocks|gridSize, blockSize>>>()
+   1) 一个block由多个线程构成，其只能被一个SM调度执行。
+      - 一个block的可用最大线程数由SM物理线程数决定，当SM不能并行执行block所需数量的线程时会罢工。
+      - 对于一个特定任务，最佳block线程数一般无法通过理论来计算出，而是需要通过测试profiling来调试确定。
+        一般而言，最佳block线程数可以最大程度上的利用硬件资源。
+   2) 每个线程有自己的local memory, 每个block有shared memory供block内线程使用（SM在执行block时应该会给该block划分），所有block共同使用全局显存。
+   3) GPU线程和CPU线程是相互异步的，CPU不会等待核函数执行完备。
+      为了在CPU侧获得正确的GPU结果，需要在CPU侧执行cudaDeviceSynchronize()以等待GPU核函数执行完毕。
+
+** 参考文档
+1. https://developer.nvidia.com/blog/even-easier-introduction-cuda/
+2. [[https://zhuanlan.zhihu.com/p/34587739][CUDA编程入门极简教程]]
+3. [[https://zhuanlan.zhihu.com/p/26890920210][CUDA编程入门极简教程【从硬件到代码】]]
+
+* 分布式系统
+1. CAP: Consistency（一致性）、 Availability（可用性）、Partition tolerance（分区容错性）
+   1) CAP三者不可兼得，P是分布式系统必须的，因此一般选取AP (Eureka)或CP (ZooKeeper)方案
+   2) BASE是AP方案的延伸: Basically Available（基本可用） 、Soft-state（软状态）和Eventually Consistent（最终一致性）
+   3) [[https://www.cnblogs.com/three-fighter/p/15293310.html][分布式必备理论基础：CAP和BASE]]
+2. 分布式进程同步机制
+   1) 分布式锁
+   2) 阻塞队列
+      - Redis BLPOP
+      - 消息队列中间件
+3. 分布式一致性协议
+   1) [[https://zhuanlan.zhihu.com/p/136162967][分布式一致性协议三部曲:深入理解一致性协议]]
+   2) 分布式事务
